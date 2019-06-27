@@ -71,13 +71,19 @@ You need to make the appropriate changes to the requirements.txt and Dockerfile 
 The rest of the settings are standard for Django and you can [set it][7] how you want in **settings.py** file.
 
 ## REST API
-###End points
+
+### End points
+
 **/api/directions/** - short aliases for links. 
-#####Available methods
+
+##### Available methods
+
 GET, POST, HEAD, OPTIONS
 
 **/api/userdirections/** - short links, associated with users.
-#####Available methods
+
+##### Available methods
+
 GET, POST, HEAD, OPTIONS
 
 More details can be found by logging in through the browser to **<you_shortener_host>/api/**.
