@@ -1,0 +1,15 @@
+*.log
+.env*
+*.MD
+.idea
+Makefile
+.gitignore
+.gitattributes
+.dockerignore
+LICENSE
+**/*.pyc
+**/__pycache__
+.deployment
+pyproject.toml
+.git
+celerybeat-schedule

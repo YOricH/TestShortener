@@ -1,0 +1,105 @@
+# docker-compose.yml
+
+version: '3.8'
+
+services:
+  postgresql:
+    image: postgres:15-alpine
+    container_name: shortener.postgresql
+    restart: 'no'
+    ports:
+      - '5432:5432'
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+    healthcheck:
+      test: [ "CMD-SHELL", "PGPASSWORD=${POSTGRES_PASSWORD} psql -h ${POSTGRES_HOST} -U ${POSTGRES_USER} -d ${POSTGRES_DB} -c '\\q'" ]
+      interval: 5m
+      timeout: 5s
+      retries: 3
+      start_period: 5s
+
+  redis:
+    image: redis:7-alpine
+    container_name: shortener.redis
+    restart: 'no'
+    ports:
+      - '6379:6379'
+    healthcheck:
+      test: [ "CMD-SHELL", "redis-cli ping | grep PONG" ]
+      interval: 5m
+      timeout: 5s
+      retries: 3
+      start_period: 5s
+    volumes:
+      - redis_data:/data
+
+  django:
+    image: shortener.django:latest
+    container_name: shortener.django
+    restart: 'on-failure'
+    command: gunicorn project.wsgi:application --reload --bind 0.0.0.0:8000 --workers 4
+    build:
+      context: .
+      dockerfile: .deployment/Dockerfile
+    ports:
+      - '8000:8000'
+    depends_on:
+      - redis
+      - postgresql
+    env_file: .env.compose
+    environment:
+      DO_MIGRATE: 'True'
+    healthcheck:
+      test: [ "CMD-SHELL", "wget --spider 0.0.0.0:8000/api/" ]
+      interval: 5m
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+  celery:
+    image: shortener.django:latest
+    container_name: shortener.celery
+    restart: 'on-failure'
+    build:
+      context: .
+      dockerfile: .deployment/Dockerfile
+    env_file: .env.compose
+    depends_on:
+      - redis
+      - postgresql
+      - django
+    command: celery -A project worker --loglevel=${LOG_LEVEL} --concurrency=4
+    healthcheck:
+      test: [ "CMD-SHELL", "celery -A project status" ]
+      interval: 5m
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+  celery-beat:
+    image: shortener.django:latest
+    container_name: shortener.beat
+    restart: 'on-failure'
+    build:
+      context: .
+      dockerfile: .deployment/Dockerfile
+    env_file: .env.compose
+    depends_on:
+      - redis
+      - django
+      - celery
+    command: celery -A project beat -l ${LOG_LEVEL}
+    healthcheck:
+      test: [ "CMD-SHELL", "celery -A project status" ]
+      interval: 5m
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+volumes:
+  postgres_data:
+  redis_data:

@@ -8,11 +8,40 @@ from django.dispatch import receiver
 from django.core.cache import cache
 from datetime import datetime, timedelta, timezone
 from random import random
-import logging
-import hashlib
-import uuid
+from uuid import UUID, uuid4
+from logging import getLogger
+from hashlib import md5
 
-logger = logging.getLogger(__name__)
+
+logger = getLogger(__name__)
+
+
+def get_set_user_uuid(request_data):
+    """
+    Gets or sets and returns the ID of the user in the session.
+
+    Keywords arguments:
+    request_data -- object with request data
+
+    Return value:
+    user_uuid -- str
+    """
+    if not request_data or not hasattr(request_data, 'session'):
+        err_str = (
+            f'The value of parameter "{request_data}" is incorrect: {request_data}'
+        )
+        logger.error(err_str)
+        raise ValueError(err_str)
+
+    user_uuid = request_data.session.get('user_uuid', None)
+    logger.debug(f'Session.get(user_uuid)={user_uuid}')
+
+    if not user_uuid:
+        user_uuid = str(uuid4())
+        request_data.session['user_uuid'] = user_uuid
+        logger.debug(f'Set new user_uuid={user_uuid}')
+
+    return user_uuid
 
 
 class Direction(models.Model):
@@ -22,19 +51,18 @@ class Direction(models.Model):
     target = models.URLField(max_length=2000)
     updated = models.DateTimeField(auto_now=True, auto_now_add=False)
 
-    @classmethod
-    def generate_subpart(cls, target, random_sub=False, alphabet=settings.BASE_ENCODING):
-        """Generates and returns tne new subpart for target link. It takes a part of md5-hash of the 'target' string
+    @staticmethod
+    def generate_subpart(target, random_sub=False, alphabet=settings.BASE_ENCODING):
+        """Generates and returns tne new subpart for the target link. It takes a part of md5-hash of the 'target' string
         end encodes it with 'alphabet'.
 
         Keywords arguments:
-        target -- link for shorting, str
+        target -- link for shorting. str
         random_sub -- if True, function uses random hash. Boolean
         alphabet -- the string of chars for encoding. str
 
         Return value:
         subpart -- the short alias for target. str
-
         """
         if not target:
             err_str = 'The argument "target" is empty!'
@@ -42,21 +70,21 @@ class Direction(models.Model):
             raise ValueError(err_str)
 
         if random_sub:
-            hash_str = str(hashlib.md5(str(random()).encode('utf-8')).hexdigest()[:settings.SUBPART_HASH_LEN])
+            hash_str = str(
+                md5(str(random()).encode('utf-8')).hexdigest()[
+                    : settings.SUBPART_HASH_LEN
+                ]
+            )
         else:
             encoded_target = target.encode('utf-8')
-            hash_md5 = hashlib.md5(encoded_target)
-            hash_str = str(hash_md5.hexdigest()[:settings.SUBPART_HASH_LEN])
+            hash_md5 = md5(encoded_target)
+            hash_str = str(hash_md5.hexdigest()[: settings.SUBPART_HASH_LEN])
 
-        num = int(hash_str, 16)
-
-        if not num:
-            return alphabet[0]
-
-        if num < 0:
-            err_str = 'The variable "target" num < 0!'
-            logger.error(err_str)
-            raise ValueError(err_str)
+        try:
+            num = int(hash_str, 16)
+        except (ValueError, TypeError) as e:
+            logger.exception(f'"hash_str" to int casting error: {type(e)} - {str(e)}')
+            raise
 
         result = ''
         base_len = len(alphabet)
@@ -72,110 +100,105 @@ class Direction(models.Model):
 
         Return value:
         int -- rest of life.
-
         """
         delta = timedelta(seconds=settings.DIRECTION_LIFETIME_SEC)
         now = datetime.now(timezone.utc)
-
         return (self.updated + delta - now).total_seconds()
 
-    @classmethod
-    def get_or_create_direction(cls, subpart, target):
-        """Gets and updates or creates direction. If creation failed, raises Exception.
+    def can_update(self, new_target):
+        """
+        # If Celery is not working or there was an error we can update and use the expired direction.
+
+        Keywords arguments:
+        new_target -- link for shorting. str
+
+        Return value:
+        bool - True if we can update this direction.
+        """
+        if self.get_rest_of_life() > 0:
+            return False
+
+        logger.warning(f'Edit the existing direction: "{self}"')
+        self.target = new_target
+        self.save()
+        UserDirection.objects.filter(direction__subpart=self.subpart).delete()
+        logger.warning(f'The existing direction was updated: "{self}"')
+        return True
+
+    @staticmethod
+    def get_or_create_direction(subpart, target):
+        """Gets and updates or creates direction. If creation failed, raises ValueError.
 
         Keywords arguments:
         subpart -- the short alias for target. str
-        target -- link for shorting, str
+        target -- link for shorting. str
 
         Return value:
         direction, err_str -- Direction instance and error string.
         """
         err_str = None
         user_subpart = False
+        log_message = 'created'
 
         if not subpart:
             subpart = Direction.generate_subpart(target)
         else:
             user_subpart = True
 
-        exist = False
+        direction, created = Direction.objects.get_or_create(
+            subpart=subpart, defaults={'target': target}
+        )
 
-        try:  # Use get() (not get_or_create()) to avoid unnecessary query.
-            direction = Direction.objects.get(subpart=subpart)
-            exist = True
-        except Direction.DoesNotExist:
-            direction = Direction()
-            direction.subpart = subpart
-            direction.target = target
-            direction.save()
+        if direction.target == target:
+            if not created:
+                direction.save()  # To update the lifetime
+                log_message = 'updated'
+            logger.debug(f'The direction "{direction}" has {log_message}.')
+            return direction, err_str
 
-            logger.debug(f'Created new direction: "{direction}"')
+        # Next, we process the case when direction.target != target
+        if direction.can_update(target):
+            return direction, err_str
 
-        if direction.target != target:
+        if user_subpart:
+            err_str = f'The subpart "{subpart}" is already used!'
+            logger.warning(err_str)
+            return direction, err_str
 
-            # If Celery is not working or there was an error.
-            if direction.get_rest_of_life() <= 0:
-                logger.warning(f'Edit the existing direction: "{direction}"')
+        # The subpart is already used.
+        # The chance of getting here is extremely small, but processing is still necessary.
+        # Request in a loop. It's a bad solution, but such a situation is almost impossible.
+        logger.warning(f'The subpart "{subpart}" is already used!')
 
-                direction.target = target
-                direction.save()
+        for i in range(settings.LAST_TRY_NUM):
+            subpart = Direction.generate_subpart(target, True)
 
-                logger.warning(f'The existing direction updated: "{direction}"')
-            else:
-                if user_subpart:
-                    err_str = f'The subpart "{subpart}" is already used!'
-                    logger.warning(err_str)
-                else:
-                    # The subpart is already used.
-                    # The chance of getting here is extremely small, but processing is still needed.
-                    # Request in a loop. This is bad, but this situation is almost impossible.
-                    logger.warning(f'The subpart "{subpart}" is already used!')
+            direction, created = Direction.objects.get_or_create(
+                subpart=subpart, defaults={'target': target}
+            )
 
-                    for i in range(settings.LAST_TRY_NUM):
-                        subpart = Direction.generate_subpart(target, True)
+            if direction.target == target:
+                if not created:
+                    direction.save()  # To update the lifetime
+                logger.debug(f'Save the direction: "{direction}"')
+                break
 
-                        try:
-                            direction = Direction.objects.get(subpart=subpart)
-                        except Direction.DoesNotExist:
-                            direction = Direction()
-                            direction.subpart = subpart
-                            direction.target = target
-                            direction.save()
+            if direction.can_update(target):
+                break
 
-                            logger.debug(f'Created new direction: "{direction}"')
-                            break
-
-                        if direction.target != target:
-
-                            if direction.get_rest_of_life() <= 0:
-                                logger.warning(f'Edit the existing direction: "{direction}"')
-
-                                direction.target = target
-                                direction.save()
-
-                                logger.warning(f'The existing direction updated: "{direction}"')
-                                break
-
-        else:
-            if exist:
-                direction.save()
-
-                logger.debug(f'The direction "{direction}" has updated.')
-
-        if direction.target != target:
-            if not user_subpart:
-                # If nothing helped:
-                err_str = f'The subpart "{subpart}" is already used! ' \
-                    f'Shuffling did not help. {target} did not writed to DB.'
-
-                logger.error(err_str)
-                raise Exception(err_str)
+        if direction.target != target:  # If nothing helped
+            err_str = (
+                f'The subpart "{subpart}" is already used! '
+                f'Shuffling did not help. {target} was not recorded in the DB.'
+            )
+            logger.error(err_str)
+            raise ValueError(err_str)
 
         return direction, err_str
 
-    @classmethod
-    def get_threshold_date(cls):
-        """Returns the date, less than which should not be a field 'updated' of records in the database.
+    @staticmethod
+    def get_threshold_date():
+        """Returns the date less than which the field "updated" records in the database should not be.
 
         Return value:
         datetime -- date to search for obsolete entries.
@@ -194,17 +217,41 @@ class Direction(models.Model):
 
 
 class UserDirection(models.Model):
-    """This class represents an user list of redirects in DB."""
+    """This class represents the user's redirection in the DB."""
 
     direction = models.ForeignKey(Direction, on_delete=models.CASCADE)
-    user_uuid = models.UUIDField(default=uuid.uuid4, editable=False)
-    timestamp = models.DateTimeField(auto_now=False, auto_now_add=True)
+    user_uuid = models.UUIDField(default=uuid4, editable=False)
+    timestamp = models.DateTimeField(auto_now=True, auto_now_add=False)
 
     def __str__(self):
         return f'{self.direction} {self.user_uuid} {self.timestamp}'
 
     class Meta:
-        ordering = ["-timestamp"]
+        ordering = ['-timestamp']
+        unique_together = [['direction', 'user_uuid']]
+
+    @staticmethod
+    def get_or_create_user_direction(user_uuid, direction):
+        """Gets and updates or creates UserDirection.
+
+        Keywords arguments:
+        user_uuid -- user ID (from sessions or generated). str or UUID
+        direction -- Direction object
+
+        Return value:
+        user_direction -- UserDirection instance.
+        """
+        if isinstance(user_uuid, str):
+            user_uuid = UUID(user_uuid)
+        user_direction, created = UserDirection.objects.get_or_create(
+            user_uuid=user_uuid, direction=direction
+        )
+
+        if not created:
+            user_direction.save()  # To update the timestamp (for ordering)
+
+        logger.debug(f'Save UserDirection: {user_direction}')
+        return user_direction
 
 
 @receiver(post_save, sender=Direction)
@@ -212,13 +259,13 @@ def add_to_cache(instance, **kwargs):
     """Saves a redirect in cache after saving in DB.
 
     Keywords arguments:
-    instance -- instance of sender class, Direction (in this case)
-
+    instance -- instance of sender class, Direction
     """
-    if settings.CACHE_ON_CREATE and settings.USE_CACHE:
-
+    if settings.USE_CACHE and settings.CACHE_ON_CREATE:
         try:
-            cache.set(instance.subpart, instance.target, settings.DIRECTION_LIFETIME_SEC)
+            cache.set(
+                instance.subpart, instance.target, settings.DIRECTION_LIFETIME_SEC
+            )
             logger.debug(f'Direction "{instance}" saved in cache.')
         except Exception as e:
             logger.exception(f'Error saving direction in cache: {type(e)} - {str(e)}')

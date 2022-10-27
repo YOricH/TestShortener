@@ -1,0 +1,196 @@
+# postgresql
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: postgresql
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: postgresql
+  template:
+    metadata:
+      labels:
+        app: postgresql
+    spec:
+      containers:
+        - name: postgresql
+          image: postgres:15-alpine
+          envFrom:
+            - configMapRef:
+                name: test-config
+          livenessProbe:
+            exec:
+              command:
+                - /bin/sh
+                - -c
+                - |
+                  PGPASSWORD=$POSTGRES_PASSWORD psql -U $POSTGRES_USER -d $POSTGRES_DB -c 'SELECT 1'
+            initialDelaySeconds: 10
+            periodSeconds: 300
+          ports:
+            - containerPort: 5432
+          resources:
+            requests:
+              memory: "1Gi"
+            limits:
+              memory: "2Gi"
+          volumeMounts:
+            - name: postgres-data
+              mountPath: /var/lib/postgresql/data
+      volumes:
+        - name: postgres-data
+          persistentVolumeClaim:
+            claimName: postgres-pvc
+---
+# redis
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: redis
+  labels:
+    deployment: redis
+spec:
+  selector:
+    matchLabels:
+      pod: redis
+  replicas: 1
+  template:
+    metadata:
+      labels:
+        pod: redis
+    spec:
+      containers:
+      - name: redis
+        image: redis:7-alpine
+        ports:
+          - containerPort: 6379
+        resources:
+          requests:
+            memory: "1Gi"
+          limits:
+            memory: "2Gi"
+        volumeMounts:
+          - name: redis-data
+            mountPath: /data
+        livenessProbe:
+          exec:
+            command:
+              - /bin/sh
+              - -c
+              - |
+                redis-cli ping | grep PONG
+          initialDelaySeconds: 5
+          periodSeconds: 300
+      volumes:
+        - name: redis-data
+          persistentVolumeClaim:
+            claimName: redis-pvc
+---
+# shortener
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: shortener
+  labels:
+    app: shortener
+spec:
+  replicas: 1
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 2
+      maxUnavailable: 0
+  selector:
+    matchLabels:
+      app: shortener
+  template:
+    metadata:
+      labels:
+        app: shortener
+    spec:
+      hostname: shortener
+      restartPolicy: Always
+      initContainers:
+        - name: django-init
+          image: yorich/test_shortener:latest
+          imagePullPolicy: Always
+          command: [ "/bin/sh", "-c" ]
+          args:
+            - python manage.py migrate --noinput
+          envFrom:
+            - configMapRef:
+                name: test-config
+          resources:
+            requests:
+              memory: "128Mi"
+            limits:
+              memory: "256Mi"
+      containers:
+        - name: django
+          image: yorich/test_shortener:latest
+          imagePullPolicy: Always
+          command: ["gunicorn", "project.wsgi:application", "--reload", "--bind=0.0.0.0:8000", "--workers=4"]
+          envFrom:
+            - configMapRef:
+                name: test-config
+          ports:
+            - containerPort: 8000
+          livenessProbe:
+            exec:
+              command:
+                - /bin/sh
+                - -c
+                - |
+                  wget --spider 0.0.0.0:8000/api/
+            initialDelaySeconds: 10
+            periodSeconds: 300
+          resources:
+            requests:
+              memory: "256Mi"
+            limits:
+              memory: "512Mi"
+        - name: celery
+          image: yorich/test_shortener:latest
+          imagePullPolicy:
+          command: [ "celery", "-A", "project", "worker", "--loglevel=info", "--concurrency=4" ]
+          envFrom:
+            - configMapRef:
+                name: test-config
+          livenessProbe:
+            exec:
+              command:
+                - /bin/sh
+                - -c
+                - |
+                  celery -A project status
+            initialDelaySeconds: 10
+            periodSeconds: 300
+            timeoutSeconds: 5
+          resources:
+            requests:
+              memory: "256Mi"
+            limits:
+              memory: "512Mi"
+        - name: celery-beat
+          image: yorich/test_shortener:latest
+          imagePullPolicy:
+          command: [ "celery", "-A", "project", "beat", "--loglevel=info" ]
+          envFrom:
+            - configMapRef:
+                name: test-config
+          livenessProbe:
+            exec:
+              command:
+                - /bin/sh
+                - -c
+                - |
+                  celery -A project status
+            initialDelaySeconds: 10
+            periodSeconds: 300
+            timeoutSeconds: 5
+          resources:
+            requests:
+              memory: "128Mi"
+            limits:
+              memory: "256Mi"

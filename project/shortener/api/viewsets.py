@@ -2,48 +2,63 @@
 # Endpoints for REST API.
 
 from .serializers import DirectionSerializer, UserDirectionSerializer
-from shortener.models import Direction, UserDirection
+from project.shortener.models import Direction, UserDirection, get_set_user_uuid
 from rest_framework import viewsets
 from rest_framework import mixins
-import logging
-import uuid
+from uuid import UUID
+from logging import getLogger
 
 
-logger = logging.getLogger(__name__)
+logger = getLogger(__name__)
 
 
-class DirectionViewSet(mixins.UpdateModelMixin, mixins.CreateModelMixin, mixins.ListModelMixin,
-                       mixins.RetrieveModelMixin, viewsets.GenericViewSet):
+class DirectionViewSet(
+    mixins.UpdateModelMixin,
+    mixins.CreateModelMixin,
+    mixins.ListModelMixin,
+    mixins.RetrieveModelMixin,
+    viewsets.GenericViewSet,
+):
     """
     API endpoint that allows directions to be viewed or edited.
     """
+
     queryset = Direction.objects.all()
     serializer_class = DirectionSerializer
 
+    def get_queryset(self):
+        get_set_user_uuid(self.request)
+        return self.queryset
 
-class UserDirectionViewSet(mixins.CreateModelMixin, mixins.ListModelMixin, viewsets.GenericViewSet):
+
+class UserDirectionViewSet(
+    mixins.UpdateModelMixin,
+    mixins.CreateModelMixin,
+    mixins.ListModelMixin,
+    mixins.RetrieveModelMixin,
+    viewsets.GenericViewSet,
+):
     """
     API endpoint that allows user directions to be viewed or edited.
+    Only the records of the current user are displayed (according to the session).
     """
+
     queryset = UserDirection.objects.all()
     serializer_class = UserDirectionSerializer
 
     def get_queryset(self):
         """
-        Optionally restricts the returned user directions to a given user UUID,
-        by filtering against a `user_uuid` query parameter in the URL.
+        Restricts the returned user directions to a given user UUID (in the session)
         """
-        queryset = UserDirection.objects.all()
-        user_uuid = self.request.query_params.get('user_uuid', None)
+        user_uuid = get_set_user_uuid(self.request)
 
-        if user_uuid is not None:
+        if user_uuid is None:
+            return UserDirection.objects.none()
 
-            try:
-                uuid.UUID(user_uuid)
-            except Exception as e:
-                logger.exception(f'Invalid user_uuid: {type(e)} - {str(e)}')
-                return ''
+        try:
+            uuid_field = UUID(user_uuid)
+        except Exception as e:
+            logger.exception(f'Invalid user_uuid {user_uuid}: {type(e)} - {str(e)}')
+            return UserDirection.objects.none()
 
-            queryset = queryset.filter(user_uuid=user_uuid)
-
-        return queryset
+        return UserDirection.objects.filter(user_uuid=uuid_field)

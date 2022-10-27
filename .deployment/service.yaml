@@ -1,0 +1,38 @@
+# postgresql
+apiVersion: v1
+kind: Service
+metadata:
+  name: postgresql
+spec:
+  selector:
+    app: postgresql
+  ports:
+    - protocol: TCP
+      port: 5432
+      targetPort: 5432
+---
+# redis
+apiVersion: v1
+kind: Service
+metadata:
+  name: redis
+spec:
+  selector:
+    pod: redis
+  ports:
+  - protocol: TCP
+    port: 6379
+    targetPort: 6379
+---
+# shortener
+apiVersion: v1
+kind: Service
+metadata:
+  name: shortener
+spec:
+  selector:
+    app: shortener
+  ports:
+  - protocol: TCP
+    port: 8000
+    targetPort: 8000

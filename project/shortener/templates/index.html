@@ -12,7 +12,26 @@
         }
         table {
             border: 1px solid;
+            border-collapse: collapse;
+            table-layout: fixed;
+            width:100%;
             margin: auto;
+        }
+        td {
+            word-wrap:break-word;
+            border: 1px solid;
+            border-collapse: collapse;
+            margin: auto;
+            padding-left: 10px;
+            padding-right: 10px;
+        }
+        .center-div {
+            margin: auto;
+            width: fit-content;
+        }
+        form div {
+            text-align: right;
+            padding: 5px;
         }
         .errorlist {
             color: red;
@@ -23,16 +42,19 @@
 <body>
 <div class="main">
 <h1>Test shortener</h1>
-    <form method="POST">
-        {% csrf_token %}
-    {{ form.as_p }}
-        <input type="submit" value="Shorten!">
-    </form><br>
+        <form method="POST">
+            {% csrf_token %}
+            <div class="center-div">
+                {{ form.as_div }}
+            </div>
+            <input type="submit" value="Shorten!">
+        </form>
+    <br>
     {% if directions %}
-        <table border="1">
+        <table>
             <tr>
-                <td><b>Target URL</b></td>
-                <td><b>Short URL</b></td>
+                <th><b>Target URL</b></th>
+                <th><b>Short URL</b></th>
             </tr>
             {% for user_record in directions %}
                 <tr>
@@ -44,17 +66,13 @@
         {% if directions.paginator.num_pages > 1 %}
             {% if directions.has_previous %}
                 <a href="?page={{ directions.previous_page_number }}">Previous</a>
+                <a href="?page={{ directions.previous_page_number }}">{{ directions.previous_page_number}}</a>
             {% else %}
                 <a href="#">Previous</a>
             {% endif %}
-            {% if directions.has_previous %}
-                    <a href="?page={{ directions.previous_page_number }}">{{ directions.previous_page_number}}</a>
-            {% endif %}
             <a href="#">{{ directions.number }}</a>
             {% if directions.has_next %}
-                    <a href="?page={{ directions.next_page_number }}">{{ directions.next_page_number}}</a>
-            {% endif %}
-            {% if directions.has_next %}
+                <a href="?page={{ directions.next_page_number }}">{{ directions.next_page_number}}</a>
                 <a href="?page={{ directions.next_page_number }}">Next</a>
             {% else %}
                 <a href="#">Next</a>

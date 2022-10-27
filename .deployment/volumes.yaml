@@ -1,0 +1,30 @@
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: ${SERVICE_NAME}-pv
+  labels:
+    type: local
+spec:
+  storageClassName: manual
+  capacity:
+    storage: 1Gi
+  accessModes:
+    - ReadWriteOnce
+  persistentVolumeReclaimPolicy: Delete
+  hostPath:
+    path: /tmp/${SERVICE_NAME}  # inside the running k8s (minikube) instance https://minikube.sigs.k8s.io/docs/handbook/persistent_volumes/
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: ${SERVICE_NAME}-pvc
+  labels:
+    type: local
+spec:
+  storageClassName: manual
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 1Gi
+  volumeName: ${SERVICE_NAME}-pv
