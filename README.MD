@@ -119,6 +119,7 @@ The rest of the settings are standard for Django and you can [set it][7] how you
 **/api/directions/** - short aliases for links.
 ##### Available methods
 GET, POST, HEAD, OPTIONS
+
 **/api/userdirections/** - short links, associated with users. You can only work with objects belonging to the current user (defined through the session).
 ##### Available methods
 GET, POST, HEAD, OPTIONS
