@@ -15,7 +15,7 @@ spec:
     spec:
       containers:
         - name: postgresql
-          image: postgres:15-alpine
+          image: postgres:16-alpine
           envFrom:
             - configMapRef:
                 name: test-config
