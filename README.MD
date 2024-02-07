@@ -28,7 +28,7 @@ any other available Django.
 ## Requirements
 *It is recommended to use a Unix-like system. The application is tested on Manjaro and Ubuntu.*
 ### To run without containerization
-- Python >= 3.10
+- Python >= 3.11
 - pipenv >= 2022.10
 - PostgreSQL >= 14
 - Redis >= 7
